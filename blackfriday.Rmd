@@ -1,0 +1,137 @@
+---
+title: "Black Friday Kaggle"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed
+
+```{r include=FALSE}
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(cluster)
+```
+
+
+Read dataset into dataframe
+
+```{r}
+BlackFriday <- read.csv("BlackFriday.csv")
+head(BlackFriday)
+```
+
+Data Analysis
+
+```{r}
+glimpse(BlackFriday)
+```
+
+
+Check for columns with NaN values
+
+```{r}
+colnames(BlackFriday)[ apply(BlackFriday, 2, anyNA) ]
+```
+
+Fill NaN with zeros
+
+```{r}
+BlackFriday[is.na(BlackFriday)] <- 0
+```
+
+
+Change Marital_Status and Product_Category_1/2/3 to factors
+```{r}
+BlackFriday$Marital_Status <- factor(BlackFriday$Marital_Status)
+BlackFriday$Product_Category_1 <- factor(BlackFriday$Product_Category_1)
+BlackFriday$Product_Category_2 <- factor(BlackFriday$Product_Category_2)
+BlackFriday$Product_Category_3 <- factor(BlackFriday$Product_Category_3)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Create dataframe without User_ID,Product_ID
+
+```{r}
+BlackFriday_Regression <- BlackFriday
+BlackFriday_Regression$User_ID <- NULL
+BlackFriday_Regression$Product_ID <- NULL
+
+```
+
+
+Train/test division
+```{r}
+myControl_clas <-trainControl(
+  method = "cv",
+  number = 5,
+  # summaryFunction = twoClassSummary,
+  savePredictions = TRUE,
+  verboseIter = FALSE
+)
+```
+
+Regression
+
+```{r}
+model_reg_lm <- train(Purchase ~ .
+          ,data=BlackFriday_Regression,method="lm",trControl=myControl_clas)
+print(model_reg_lm)
+```
+
+
+
+
+```{r}
+BlackFriday %>%
+distinct(User_ID) %>%
+nrow() %>%
+paste("buyers registered at Black Friday")
+```
+
+
+```{r}
+```
+
+
+
+```{r}
+# Determine number of clusters
+wss <- (nrow(BlackFriday)-1)*sum(apply(BlackFriday,2,var))
+for (i in 2:15) wss[i] <- sum(kmeans(BlackFriday, 
+  	centers=i)$withinss)
+plot(1:15, wss, type="b", xlab="Number of Clusters",
+  ylab="Within groups sum of squares")
+```
+
