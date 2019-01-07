@@ -1,0 +1,106 @@
+---
+title: "Reglas de asociación Black Friday"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE}
+#install.packages("arulesViz")
+library(arules)
+library(arulesViz)
+library(tidyverse)
+```
+
+Primero transformamos los datos para poder tratarlos comodamente.
+
+```{r}
+dataset = read.csv("BlackFriday.csv")
+
+dataset = transform(dataset, Product_ID = as.numeric(Product_ID))
+
+customers_products = dataset %>%
+                        select(User_ID, Product_ID) %>%
+                        group_by(User_ID) %>%          
+                        arrange(User_ID) %>%           
+                        mutate(id = row_number()) %>% 
+                        spread(User_ID, Product_ID) %>% 
+                        t()
+
+customers_products = customers_products[-1,]
+```
+
+```{r}
+write.csv(customers_products, file = 'customers_products.csv')
+
+customersProducts = read.transactions('customers_products.csv', sep = ',', rm.duplicates = TRUE)
+```
+
+Ahora vamos a buscar reglas de asociación, que nos permitirán, por ejemplo, realizar campañas de marketing para consumidores que hayan comprado una serie de productos coincidentes con los comprados por otros consumidores.
+
+Observemos los 25 productos más comprados.
+
+```{r}
+itemFrequencyPlot(customersProducts, topN = 25)
+```
+
+```{r}
+summary(customersProducts)
+```
+
+A continuación vamos a obtener reglas de asociación utilizando el algoritmo apriori. Para esto necesitamos calcular los valores para "soporte" y "confianza".
+
+Soporte: El número mínimo de transacciones entre el número total. Tenemos un total de 5892. Vamos a tomar como valor mínimo de transacciones 75. Soporte = 75/5892 = 0,012729124
+
+Confianza: La confianza representa las ocasiones en la que la regla es correcta. El valor por defecto es 0,8. Vamos a empezar por este valor e iremos bajándolo para ver otras reglas.
+
+
+```{r}
+rules = apriori(data = customersProducts,
+               parameter = list(support = 0.012, confidence = 0.71, maxtime = 0)) 
+```
+
+Hemos tenido que bajar la confianza hasta 0,71 y con estos parámetros hemos conseguido 9 reglas. Inspeccionemos las reglas.
+
+```{r}
+inspect(sort(rules, by = 'lift'))
+```
+
+- Lhs: El grupo de objetos sacado del set de datos.
+- Rhs: El objeto predicho por el algoritmo.
+- Support: El soporte de la regla.
+- Confidence: La confianza de la regla.
+- Lift: El valor de independencia/dependencia de la regla.
+- Count: El número de veces que la regla aparece en nuestro set de datos.
+
+Visualicemos estas reglas como grafo.
+
+
+```{r}
+plot(rules, method = 'graph')
+```
+
+Probemos bajando más la confianza, hasta 0,65.
+
+```{r}
+rules = apriori(data = customersProducts,
+               parameter = list(support = 0.012, confidence = 0.65, maxtime = 0))
+```
+
+En este caso encontramos 333 reglas. Vamos a visualizarlas parcialmente.
+
+```{r}
+inspect(head(sort(rules, by = 'lift')))
+```
+
+```{r}
+plot(rules, method = 'graph', max = 25)
+```
+
+En este caso probaremos a visualizarlas agrupadas para verlas más facilmente.
+
+```{r}
+plot(rules, method = 'grouped')
+```
+
+Con esto hemos encontrados reglas que determinan articulos comprados con una confianza mayor al 70%. También tenemos más reglas rebajando algo la confianza.

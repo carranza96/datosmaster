@@ -1,0 +1,487 @@
+---
+title: "Clustering Black Friday"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+  html_notebook: default
+---
+
+
+```{r results='hide', message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(cluster)
+library(klaR)
+library(clustMixType)
+library(data.table)
+library(factoextra)
+library(tidyr)
+library(Rtsne)
+library(compareGroups)
+library(gridExtra)
+library(reshape)
+```
+
+
+
+# Preprocesado de los datos
+
+Leer dataset y mostrar algunas filas
+
+```{r}
+BlackFriday <- read.csv("BlackFriday.csv")
+dim(BlackFriday)
+head(BlackFriday)
+```
+
+Cada fila describe una compra de un producto hecha por un cliente determinado
+
+### Descripción de atributos
+- User_ID: Cateǵorico 
+- Product_ID: Categórico
+- Gender: Categórico (M,F)
+- Age: Categórico (0-17, 18-25, 26-35, 36-45, 46-50, 51-55, 55+)
+- Occupation: Categórico (0, 1, 2, ..., 19, 20)
+- City_Category: Categórico (A, B, C)
+- Stay_In_Current_City_Years: Cateǵorico (0, 1, 2, 3, 4+)
+- Marital_Status: Categórico (0, 1)
+- Product_Category_1/2/3: Categórico (1, 2, ..., 17, 18)
+- Purchase: Numérico
+
+Algunas columnas categóricas no son reconocidas como factors (User_ID, Occupation, Product_Category, Marital_Status) 
+
+```{r}
+# Factorizar columnas categóricas
+BlackFriday$User_ID <- factor(BlackFriday$User_ID)
+BlackFriday$Occupation <- factor(BlackFriday$Occupation)
+BlackFriday$Marital_Status <- factor(BlackFriday$Marital_Status)
+BlackFriday$Product_Category_1 <- factor(BlackFriday$Product_Category_1)
+BlackFriday$Product_Category_2 <- factor(BlackFriday$Product_Category_2)
+BlackFriday$Product_Category_3 <- factor(BlackFriday$Product_Category_3)
+```
+
+
+## Generación de atributos
+Como queremos hacer clustering sobre los clientes, tenemos que agrupar todas las transacciones de cada cliente en una única fila. Unificamos y creamos nuevos atributos basados en ésta agrupación de transacciones:
+
+- Atributos de perfil de cliente (User_ID, Gender, Age, Occupation, City_Category, Stay_In_Current_City_Years, Marital_Status). Eliminamos Product_ID.
+
+- Número de elementos comprados por cada categoría de producto por cada cliente (18 nuevos atributos)
+
+- Gasto total de cada cliente
+
+### Perfil de usuario
+En primer lugar, creamos un dataframe solamente con el perfil de usuario, eliminando User_ID duplicados. Trataremos la información de compras de productos después
+
+```{r}
+# Seleccionar únicamente columnas de perfil de usuario
+BlackFriday_Clustering <- dplyr::select(BlackFriday, User_ID, Gender, Age, Occupation, City_Category, Stay_In_Current_City_Years, Marital_Status)
+
+# Eliminar duplicados
+BlackFriday_Clustering <- distinct(BlackFriday_Clustering)
+```
+
+
+La edad y el número de años en la ciudad pueden ser consideradas variables númericas (Age,  Stay_In_Current_City_Years). Aunque vienen especificadas de forma categórica, nos interesa que nuestro modelo sea capaz de reconocer que, por ejemplo, dos personas de 18 y 55 años son menos parecidas que dos de 30 y 40. Si lo expresamos de forma categórica, la distancia entre todos los grupos será la misma. Por lo tanto, vamos a usar para la edad el valor medio de cada grupo. Para el número de años en la ciudad consideramos el 4+ como un 4.
+
+```{r}
+# Convertir Age & Stay_In_Current_City_Years a atributos numéricos
+# Age
+BlackFriday_Clustering$Age_Int[BlackFriday_Clustering$Age=='0-17'] <- 15
+BlackFriday_Clustering$Age_Int[BlackFriday_Clustering$Age=='18-25'] <- 22
+BlackFriday_Clustering$Age_Int[BlackFriday_Clustering$Age=='26-35'] <- 30
+BlackFriday_Clustering$Age_Int[BlackFriday_Clustering$Age=='36-45'] <- 40
+BlackFriday_Clustering$Age_Int[BlackFriday_Clustering$Age=='46-50'] <- 48
+BlackFriday_Clustering$Age_Int[BlackFriday_Clustering$Age=='51-55'] <- 53
+BlackFriday_Clustering$Age_Int[BlackFriday_Clustering$Age=='55+'] <- 60
+BlackFriday_Clustering$Age <- NULL
+
+# Stay_In_Current_City_Years
+BlackFriday_Clustering$Stay_In_Current_City_Years <- 
+  as.numeric(BlackFriday_Clustering$Stay_In_Current_City_Years) - 1
+```
+
+
+### Información de compras
+Añadimos la información de compras a cada usuario (categoría de producto y gasto total)
+
+Para las categorías de producto existen varias opciones:
+
+- Generar 18 nuevos atributos que expresen el número de items comprado por cada categoría de producto
+- Generar 18 nuevos atributos que expresen la suma total gastada por categoría de producto
+
+```{r}
+# Número de items comprados por cada categoría de producto
+purchase_category <- dplyr::select(BlackFriday, User_ID, Product_Category_1, Purchase) %>%
+  group_by(User_ID, Product_Category_1) %>%
+  summarise(Purchase = length(Purchase)) %>%
+  spread(key=Product_Category_1, value=Purchase, fill=0) %>%
+  ungroup()
+
+# Renombrar columnas
+for (n in names(purchase_category)[-1]){
+  new_colname <- paste("Product_Category_",n,sep="")
+  names(purchase_category)[names(purchase_category)==paste(n)] <- paste(new_colname)
+}
+
+BlackFriday_Clustering <- merge(BlackFriday_Clustering,purchase_category, by="User_ID")
+head(purchase_category)
+```
+
+
+```{r}
+# Suma total gastada por categoría de producto
+
+# purchase_category <- dplyr::select(BlackFriday,User_ID,Product_Category_1,Purchase) %>%
+#   group_by(User_ID,Product_Category_1) %>%
+#   summarise(Purchase = sum(Purchase)) %>%
+#   spread(key=Product_Category_1, value=Purchase, fill=0) %>%
+#   ungroup()
+# 
+# # Rename columns
+# for (n in names(purchase_category)[-1]){
+#   new_colname <- paste("Product_Category_",n,sep="")
+#   names(purchase_category)[names(purchase_category)==paste(n)] <- paste(new_colname)
+# }
+# BlackFriday_Clustering <- merge(BlackFriday_Clustering,purchase_category, by="User_ID")
+# head(purchase_category)
+```
+
+
+Generamos una columna de gasto total de cada cliente
+
+```{r}
+# Gasto total de cada cliente
+purchase_sum <- aggregate(Purchase ~ User_ID, data=BlackFriday, sum)
+BlackFriday_Clustering <- merge(BlackFriday_Clustering,purchase_sum, by="User_ID")
+```
+
+
+Eliminamos User_ID y visualizamos el dataframe transformado para clustering
+
+```{r}
+BlackFriday_Clustering$User_ID <- NULL
+head(BlackFriday_Clustering)
+```
+
+# Clustering 
+Una vez tenemos los datos agrupados por cliente, podemos hacer clustering para intentar identificar grupos con clientes similares. Dado que tenemos una mezcla de variables categóricas y numéricas, consideramos varias opciones:
+
+- K-means codificando las variables categóricas (one-hot encoding). El k-means necesita que todas las variables sean númericas para medir la distancia Euclídea. 
+
+- K-prototypes (Como el K-means pero se puede usar con variables categóricas y numéricas: Los centroides (cluster prototypes) son las medias para atributos numericos y la moda para los categóricos)
+
+- K-medoids con distancia Gower (los centros, en vez de las medias, son instancias y se calcula una matriz de disimilitud de cada instancia frente a otra)
+
+
+
+## K-means
+Para utilizar el K-means creamos un nuevo dataframe (BlackFriday_ohe) con las variables categóricas codificadas one-hot.
+
+```{r}
+# One-hot encoding
+dmy <- dummyVars(" ~ .", data = BlackFriday_Clustering)
+BlackFriday_ohe <- data.frame(predict(dmy, newdata = BlackFriday_Clustering))
+
+# Eliminar una de las columnas de variables que solo tengan dos valores (Gender and Marital_Status)
+BlackFriday_ohe$Gender.F <- NULL
+BlackFriday_ohe$Marital_Status.0 <- NULL
+```
+
+Normalizamos columnas numéricas. Como su rango es mayor, las distancias pueden ser grandes. Si no las normalizamos tendrán mayor influencia que las demás variables categóricas codificadas.
+
+```{r, results='hide', message=FALSE}
+# BlackFriday_ohe <- rescaler(BlackFriday_ohe, "range")
+cols_to_scale <- grep( "Product_Category", names(BlackFriday_ohe),value=T)
+cols_to_scale <- c(cols_to_scale, "Age_Int","Stay_In_Current_City_Years","Purchase" )
+BlackFriday_ohe <- BlackFriday_ohe %>% mutate_each_(funs(scale(.) %>% as.vector),                     vars=cols_to_scale)
+```
+
+
+Visualizar dataframe BlackFriday_ohe para el K-means
+```{r}
+head(BlackFriday_ohe)
+```
+
+
+
+
+
+
+Buscamos el número óptimo de clusters con el Elbow method (total within-cluster sum of square (wss))
+
+
+```{r results='hide', message=FALSE, warning=FALSE}
+wss <- 0
+for (i in 1:15) {
+  km.out <- kmeans(BlackFriday_ohe, centers = i, nstar=5)
+  wss[i] <- km.out$tot.withinss
+}
+```
+
+```{r}
+plot(1:15, wss, type = "b", xlab = "Number of Clusters",
+     ylab = "Within groups sum of squares")
+```
+
+Visualización de los resultados en 2D en función del número de clusters. Se reduce la dimensionalidad usando PCA y se enfrentan las dos componentes principales
+
+```{r message=FALSE}
+for (k in 3:6){
+  km <- kmeans(BlackFriday_ohe, centers=k, nstar=5)
+  fv <- fviz_cluster(km, geom = "point", data = BlackFriday_ohe) +  ggtitle(paste("2D Cluster solution (k=", k, ")", sep=""))
+  plot(fv)
+}
+
+```
+
+
+
+Escogemos 4 clusters como el mejor valor
+
+```{r}
+k <- 4
+reskm <- kmeans(BlackFriday_ohe, centers=k, nstar=5)
+BlackFriday_Clustering$cluster_kmeans <- as.factor(reskm$cluster)
+```
+
+
+
+Se crea la función clusterAnalysis para intentar interpretar los resultados del clustering, identificando las características propias de cada grupo.
+
+Primero se muestra una tabla con los distintos valores de atributos en cada cluster.
+
+Como es difícil extraer conclusiones de las tablas, mostramos gráficas de la distribución de los valores de atributos en cada cluster.
+
+Para las variables continuas usamos boxplots que muestran valor mínimo, primer cuartil, la mediana, la media, tercer cuartil y valor máximo. 
+
+Para las variables categóricas usamos Pie Charts.
+
+
+```{r}
+boxplotBF <- function(df, clusterCol, attribute){
+  ggplot(data = df, mapping= aes(x =  eval(parse(text=clusterCol)), y = eval(parse(text=attribute)), fill = eval(parse(text=clusterCol)))) +
+  geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=2) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=4) +
+  labs(title = attribute,  x=clusterCol , y = attribute)
+}
+
+pieChartBF <- function(df, clusterCol, attribute) {
+  ggplot(data=df, aes(x=factor(1), stat='identity', fill=eval(parse(text=attribute)))) +
+  theme(axis.text.x=element_blank(), axis.text.y=element_blank(), axis.ticks=element_blank()) +
+  facet_wrap(~eval(parse(text=clusterCol)))+
+  geom_bar(color="black",position = "fill") +
+  coord_polar(theta="y") +
+  labs(title = paste(attribute, " by cluster",sep="") ,  x="" , y = clusterCol, fill= attribute)
+}
+```
+
+
+```{r}
+clusterAnalysis <- function(df, clusterCol){
+  group<-compareGroups(as.formula(paste(clusterCol,"~.")),data=df, max.ylev=12, max.xlev = 21)
+  clustab<-createTable(group)
+  print(clustab)
+
+  PurchaseCluster <- boxplotBF(BlackFriday_Clustering, clusterCol, 'Purchase')
+  print(PurchaseCluster)
+  
+  AgeCluster <- boxplotBF(BlackFriday_Clustering, clusterCol, 'Age_Int')
+  print(AgeCluster)
+  StayCityCluster <-  boxplotBF(BlackFriday_Clustering, clusterCol, 'Stay_In_Current_City_Years')
+  print(StayCityCluster)
+  
+  col_plot <- grep( "Product_Category", names(BlackFriday_Clustering),value=T)
+  dat.m <- melt(BlackFriday_Clustering, id.vars=clusterCol, measure.vars=col_plot)
+  ProdCatCluster <- ggplot(dat.m,aes(x=eval(parse(text=clusterCol)), y=value, color=variable)) +     
+    geom_boxplot() +
+    labs(title="Product Categories by cluster", x=paste(clusterCol), y= "Item count") +
+    stat_summary(fun.y=mean, geom="point", shape=23, size=6) 
+  print(ProdCatCluster)
+  
+  print(pieChartBF(BlackFriday_Clustering, clusterCol,'City_Category'))
+  print(pieChartBF(BlackFriday_Clustering, clusterCol,'Gender'))
+  print(pieChartBF(BlackFriday_Clustering, clusterCol,'Occupation'))
+  print(pieChartBF(BlackFriday_Clustering, clusterCol,'Marital_Status'))
+  
+}
+```
+
+### Análisis de resultados
+
+```{r}
+clusterAnalysis(BlackFriday_Clustering,"cluster_kmeans")
+```
+
+
+
+
+## K-Prototypes
+La función kproto se puede aplicar directamente al dataframe inicial, ya que identifica las variables categóricas y numéricas.
+
+Primero estudiamos el número óptimo de clusters
+
+```{r results='hide'}
+# No consideramos la columna de cluster añadida anteriormente por el kmeans
+BlackFriday_kproto <- subset( BlackFriday_Clustering, select = -cluster_kmeans )
+wss <- 0
+for (i in 1:15) {
+  km.out <- kproto(BlackFriday_kproto, i, nstar=1)
+  wss[i] <- km.out$tot.withinss
+}
+```
+
+```{r}
+plot(1:15, wss, type = "b", xlab = "Number of Clusters",
+     ylab = "Within groups sum of squares")
+```
+
+
+Seleccionamos 4 clusters
+
+```{r results='hide'}
+reskproto <- kproto(BlackFriday_kproto, 4, nstar=5)
+BlackFriday_Clustering$cluster_kproto <- as.factor(reskproto$cluster)
+```
+
+### Análisis de resultados
+
+Hay algunas variables sobre las que no se aprecian diferencias significativos entre los clusters al tener medias y distribuciones parecidas:
+
+- Age: Media 35 años
+- Stay_In_Current_City_Years: Media 1.8 años
+- Gender: 75% Hombre
+- Marital Status: Al 50% 
+- Occupation: Dominan levemente las clases 0, 4, 7
+
+Aún así, se pueden observar algunas características interesantes de cada cluster:
+
+- Cluster 1: Gasto medio 2500, Mayoría ciudad B, Media de 50 productos categorías 1,5,8
+- Cluster 2: Gasto medio 1000, Mitad ciudad C, Media de 30 productos categorías 1, 5
+- Cluster 3 (Más grande 3500 clientes): Gasto medio menor (310), Mayoría ciudad C, Pocos productos (5/10 categoría 1, 5).
+- Cluster 4 (Más pequeño 199 clientes): Mayor gasto 4200, Solo ciudad A y B, Media mayor a 100 productos categorías 1, 5, 8; Media mayor a 20 productos categorías 2, 20.
+
+```{r}
+clusterAnalysis(BlackFriday_Clustering,'cluster_kproto')
+```
+
+
+
+
+
+## K-medoids distancia Gower
+(https://www.rdocumentation.org/packages/StatMatch/versions/1.2.0/topics/gower.dist)
+
+(https://towardsdatascience.com/clustering-on-mixed-type-data-8bbd0a2569c3)
+
+La distancia Gower permite trabajar con datos tanto categóricos como continuos. 
+
+Crea una matriz de disimilitud basada en la media de distancias parciales (cada atributo) entre individuos. Según el tipo de variable, la distancia parcial se calcula con una fórmula distinta. 
+
+Para variables categóricas la distancia es 0 si el valor es igual y 1 si son distintas.
+Para variables numéricas se usa la diferencia en valor absoluto dividida por el mayor rango de la variable.
+
+La distancia Gower funciona bien con el algoritmo PAM (Partitioning around mediods).
+PAM es parecido a K-means, pero los centros de cada cluster en vez de ser centroides de medias definidas por distancia Euclidea, son directamente ciertos individuos (medoids).
+Esto es útil para la interpretación ya que el centro representa un "individuo típico" de cada cluster.
+Sin embargo, este método requiere más tiempo y cálculo (orden cuadrático)
+
+
+```{r}
+BlackFriday_pam <- subset( BlackFriday_Clustering, select = -c(cluster_kmeans,cluster_kproto) )
+head(BlackFriday_pam)
+```
+
+Calculamos la matriz de distancias gower con la función daisy
+```{r results='hide', message=FALSE}
+gower_dist <- daisy(BlackFriday_pam, metric = "gower")
+gower_mat <- as.matrix(gower_dist)
+```
+Para comprobar que la distancia gower se calcula correctamente, la matriz nos permite obtener, por ejemplo, los clientes más y menos similares
+
+```{r}
+# Clientes más parecidos
+BlackFriday_pam[which(gower_mat == min(gower_mat[gower_mat != min(gower_mat)]), arr.ind = TRUE)[1, ], ]
+```
+
+
+```{r}
+# Clientes menos parecidos
+BlackFriday_pam[which(gower_mat == max(gower_mat[gower_mat != max(gower_mat)]), arr.ind = TRUE)[1, ], ]
+```
+
+Para calcular el número óptimo de clusters en este caso, usamos el que tenga mayor silhouette width, que mide la similitud de un objeto con su cluster comparado con los demás
+
+```{r}
+sil_width <- c(NA)
+for(i in 2:8){  
+  pam_fit <- pam(gower_dist, diss = TRUE, k = i)  
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+plot(1:8, sil_width,
+     xlab = "Number of clusters",
+     ylab = "Silhouette Width")
+lines(1:8, sil_width)
+```
+
+El mayor valor de silhouette width se da con 2 clusters, pero elegimos 3 ya que tiene un valor parecido y nos puede aportar más información.
+
+Visualizamos la representación en 2D
+
+
+```{r}
+pam_fit <- pam(gower_dist, diss = TRUE, k = 3) 
+tsne_obj <- Rtsne(gower_dist, is_distance = TRUE)
+tsne_data <- tsne_obj$Y %>%
+  data.frame() %>%
+  setNames(c("X", "Y")) %>%
+  mutate(cluster = factor(pam_fit$clustering))
+ggplot(aes(x = X, y = Y), data = tsne_data) +
+  geom_point(aes(color = cluster))
+```
+
+
+Creamos columna de cluster_pam
+```{r}
+BlackFriday_Clustering$cluster_pam <- as.factor(pam_fit$clustering)
+```
+
+### Análisis de resultados
+
+Con este resultado se obtienen diferencias en los clusters en un mayor número de variables, y los clusters son de un tamaño similar.
+
+Hay algunas variables sobre las que no se aprecian diferencias significativos entre los clusters al tener medias y distribuciones parecidas:
+
+- Stay_In_Current_City_Years: Media 1.8 años
+- Gender: 70% Hombre
+- Product_Category: Todos compran mayormente productos tipo 1, 5, 8. Solo el cluster 3 destaca por tener un volumen de compra mayor de estos productos
+
+Se pueden observar algunas características interesantes de cada cluster:
+
+- Cluster 1: Gasto medio 535, Mayoría ciudad C, Edad media 32, Ocupación mayoritaria 0, Estado civil 0
+- Cluster 2: Gasto medio 602, Mayoría ciudad C, Edad media 41, Ocupación mayoritaria 7, Estado civil 1
+- Cluster 3: Gasto medio mayor (1580), Mayoría ciudad B, Edad media 31, Ocupación mayoritaria 4, Estado civil 0
+
+
+Centros de cada cluster
+```{r}
+BlackFriday_Clustering[pam_fit$medoids,]
+```
+
+
+```{r}
+clusterAnalysis(BlackFriday_Clustering,'cluster_pam')
+```
+
+
+
+# Conclusiones
+Usando el algoritmo K-medoids obtenemos un mejor resultado. La partición en clusters es más significativa puesto que se aprecian mayores diferencias entre las características de cada cluster.
+
+El peor resultado fue al usar el K-means ya que su aplicación a variables mixtas (categóricas y numéricas) no es directa y la codificación incrementa el número de atributos y su complejidad.
+
+Sin embargo, con vistas a categorizar clientes según sus compras (tipo de producto) no se pueden obtener muchas conclusiones ya que existe una gran tendencia de todos los clientes a comprar productos de las categorías 1, 5, y 8. Por lo tanto es díficil discernir grupos que prefieran unas categorías sobre otras. En cuanto al gasto total si se pueden apreciar diferencias, pero no en cuanto a qué compran los clientes.
+Esto ocurre con otros atributos como la edad, el genéro, o el número de años en la ciudad, ya que tienen un valor muy frecuente en el conjunto de datos que siempre dominan los clusters.
+
