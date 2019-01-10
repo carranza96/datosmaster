@@ -1,0 +1,151 @@
+---
+title: "Regresión Black Friday Regresión Lineal"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE}
+#install.packages("arulesViz")
+#install.packages("psych")
+library(arules)
+library(arulesViz)
+library(tidyverse)
+library(psych)
+library(ggplot2)
+```
+
+Carga e inspeccion de los datos del dataset
+
+```{r}
+mydata = read.csv("BlackFriday.csv")
+
+head(mydata)
+tail(mydata)
+str(mydata)
+summary(mydata)
+psych::describe(mydata)
+dim(mydata)
+
+```
+
+Realizamos cambios al tipo de datos de la variable Marital Status
+
+```{r}
+str(mydata)
+mydata$Marital_Status = as.factor(mydata$Marital_Status)
+
+```
+
+Hacemos un análisis previo con las funcion stat
+
+```{r}
+stat_function = function(x){
+    if(class(x)=="integer"|class(x)=="numeric"){
+        var_type = class(x)
+        length = length(x)
+        miss_val = sum(is.na(x))
+        mean = mean(x,na.rm = T)
+        std = sd(x,na.rm = T)
+        var = var(x,na.rm = T)
+        cv = std/mean
+        min = min(x)
+        max = max(x,na.rm = T)
+        pct = quantile(x,na.rm = T,p=c(0.75,0.85,0.90,0.95,0.99,1.0))
+        return(c(var_type=var_type,length=length,miss_val=miss_val,mean=mean,std=std,var=var,cv=cv,min=min,max=max,pct=pct))
+        }
+}
+```
+
+Nombres de las variables categoricas y numericas
+
+```{r}
+num_var = names(mydata)[sapply(mydata,is.numeric)]
+cat_var = names(mydata)[!sapply(mydata,is.numeric)]
+```
+
+Aplicamos la función anterior a nuestras variables
+
+```{r}
+mystat = apply(mydata[num_var],2,stat_function)
+t(mystat)
+```
+
+Mostramos los valores extremos (outlier) 
+
+```{r}
+options(scipen = 9999)
+boxplot(mydata[num_var],horizontal = T,col = rainbow(1:10))
+```
+
+Valores perdidos en los datos
+
+```{r}
+t(colSums(is.na(mydata)))
+```
+
+Product_Category_2 y Product_Category_3 dado que contienen un alto porcentaje de datos ausentes. (31% y 69.44%)
+
+```{r}
+mydata$Product_Category_2 <- NULL
+mydata$Product_Category_3 <- NULL
+```
+
+```{r}
+mydata$User_ID <- NULL
+mydata$Product_ID <- NULL
+```
+Regresion lineal previa construccion del modelo
+
+Dividimos el dataset en entrenamiento y test.
+```{r}
+sample = sample(1:nrow(mydata),size = floor(nrow(mydata)*0.7))
+train = mydata[sample,]
+test = mydata[-sample,]
+```
+
+Construcción del Modelo
+
+```{r}
+lm_fit1 = lm(Purchase~.,data = train)
+summary(lm_fit1)
+step = step(lm_fit1)
+lm_fit2 = lm(Purchase ~ Gender + Age + Occupation + City_Category + Stay_In_Current_City_Years + Marital_Status + Product_Category_1,data= train)
+summary(lm_fit2)
+```
+Predecimos el valor en el test
+
+```{r}
+train_prob_purchase = predict(lm_fit2,newdata = train)
+train = cbind(train,train_prob_purchase)
+
+test_prob_purchase = predict(lm_fit2,newdata = test)
+test = cbind(test,test_prob_purchase)
+```
+Evaluamos la precisión del modelo utlizando (RMSE, MAPE y COR)
+
+```{r}
+# 1. MAPE
+# train
+(mean(abs((train$Purchase-train$train_prob_purchase)/train$Purchase)))
+# test
+(mean(abs((test$Purchase-test$test_prob_purchase)/test$Purchase)))
+
+# 2. RMSE
+#train 
+(sqrt(mean((train$Purchase-train$train_prob_purchase)**2)))
+#test
+(sqrt(mean((test$Purchase-test$test_prob_purchase)**2)))
+
+#3.CoR
+#train 
+(cor(train$Purchase,train$train_prob_purchase))
+#test 
+(cor(test$Purchase,test$test_prob_purchase))
+```
+
+Analizamos el error cometido
+
+```{r}
+ggplot(data = train)+geom_bar(mapping = aes(x = Gender,y = Purchase),stat = "identity",position = "stack")
+```
