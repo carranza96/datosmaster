@@ -1,16 +1,12 @@
 ---
-title: "Regresión Black Friday Regresión Lineal"
+title: "Regresion - Black Friday Regresion Lineal"
 output:
   html_document:
     df_print: paged
 ---
 
 ```{r message=FALSE}
-#install.packages("arulesViz")
 #install.packages("psych")
-library(arules)
-library(arulesViz)
-library(tidyverse)
 library(psych)
 library(ggplot2)
 ```
@@ -19,12 +15,36 @@ Carga e inspeccion de los datos del dataset
 
 ```{r}
 mydata = read.csv("BlackFriday.csv")
+```
 
+Realizamos una inspecciÃ³n de los datos del dataset
+
+```{r}
 head(mydata)
+```
+
+
+```{r}
 tail(mydata)
+```
+
+
+```{r}
 str(mydata)
+```
+
+
+```{r}
 summary(mydata)
+```
+
+
+```{r}
 psych::describe(mydata)
+```
+
+
+```{r}
 dim(mydata)
 
 ```
@@ -33,11 +53,13 @@ Realizamos cambios al tipo de datos de la variable Marital Status
 
 ```{r}
 str(mydata)
-mydata$Marital_Status = as.factor(mydata$Marital_Status)
-
 ```
 
-Hacemos un análisis previo con las funcion stat
+```{r}
+mydata$Marital_Status = as.factor(mydata$Marital_Status)
+```
+
+Hacemos un an?lisis previo con las funcion stat
 
 ```{r}
 stat_function = function(x){
@@ -64,7 +86,7 @@ num_var = names(mydata)[sapply(mydata,is.numeric)]
 cat_var = names(mydata)[!sapply(mydata,is.numeric)]
 ```
 
-Aplicamos la función anterior a nuestras variables
+Aplicamos la funciÃ³n anterior a nuestras variables
 
 ```{r}
 mystat = apply(mydata[num_var],2,stat_function)
@@ -104,12 +126,20 @@ train = mydata[sample,]
 test = mydata[-sample,]
 ```
 
-Construcción del Modelo
+ConstrucciÃ³n del Modelo
 
 ```{r}
 lm_fit1 = lm(Purchase~.,data = train)
 summary(lm_fit1)
+```
+
+
+```{r}
 step = step(lm_fit1)
+```
+
+
+```{r}
 lm_fit2 = lm(Purchase ~ Gender + Age + Occupation + City_Category + Stay_In_Current_City_Years + Marital_Status + Product_Category_1,data= train)
 summary(lm_fit2)
 ```
@@ -122,26 +152,42 @@ train = cbind(train,train_prob_purchase)
 test_prob_purchase = predict(lm_fit2,newdata = test)
 test = cbind(test,test_prob_purchase)
 ```
-Evaluamos la precisión del modelo utlizando (RMSE, MAPE y COR)
+Evaluamos la precisi?n del modelo utlizando (RMSE, MAPE y COR)
 
 ```{r}
 # 1. MAPE
 # train
 (mean(abs((train$Purchase-train$train_prob_purchase)/train$Purchase)))
+```
+
+```{r}
 # test
 (mean(abs((test$Purchase-test$test_prob_purchase)/test$Purchase)))
+```
 
+```{r}
 # 2. RMSE
 #train 
 (sqrt(mean((train$Purchase-train$train_prob_purchase)**2)))
+```
+
+```{r}
 #test
 (sqrt(mean((test$Purchase-test$test_prob_purchase)**2)))
+```
 
+```{r}
 #3.CoR
 #train 
 (cor(train$Purchase,train$train_prob_purchase))
+```
+
+```{r}
 #test 
 (cor(test$Purchase,test$test_prob_purchase))
+```
+
+```{r}
 ```
 
 Analizamos el error cometido
